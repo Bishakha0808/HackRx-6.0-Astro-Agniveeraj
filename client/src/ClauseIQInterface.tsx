@@ -1,5 +1,10 @@
-import React, { useState, useRef } from 'react';
-import { ArrowDown, ArrowRight, X, Upload } from 'lucide-react';
+"use client";
+
+import React, { useState, useRef, useEffect } from "react";
+import { ArrowDown, ArrowRight, X, Upload } from "lucide-react";
+import { io } from "socket.io-client";
+
+const socket = io("http://localhost:5000");
 
 interface FileItem {
   name: string;
@@ -9,42 +14,75 @@ interface FileItem {
 }
 
 const ClauseIQInterface: React.FC = () => {
-  const [message, setMessage] = useState<string>('');
+  const [message, setMessage] = useState<string>("");
+  const [messages, setMessages] = useState<{ text: string; sender: string }[]>([]);
   const [uploadProgress, setUploadProgress] = useState<number>(0);
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [files, setFiles] = useState<FileItem[]>([]);
   const [dragOver, setDragOver] = useState<boolean>(false);
+  const [uploadedFiles, setUploadedFiles] = useState<any[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleSend = (): void => {
-    if (message.trim()) {
-      console.log('Sending message:', message);
-      setMessage('');
-    }
+  useEffect(() => {
+    socket.on("receive_message", (msg) => {
+      setMessages((prev) => [...prev, msg]);
+    });
+    
+    // Fetch existing PDF files from MongoDB
+    const fetchUploadedFiles = async () => {
+      try {
+        const response = await fetch("http://localhost:5000/api/pdf");
+        const files = await response.json();
+        setUploadedFiles(files);
+      } catch (error) {
+        console.error("Error fetching uploaded files:", error);
+      }
+    };
+    
+    fetchUploadedFiles();
+    
+    return () => {
+      socket.off("receive_message");
+    };
+  }, []);
+
+  const handleSend = () => {
+    if (!message.trim()) return;
+    const msg = { text: message, sender: "user" };
+    socket.emit("send_message", msg);
+    setMessages((prev) => [...prev, msg]);
+    setMessage("");
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent<HTMLInputElement>): void => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+  const handleKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
   };
 
+  const formatFileSize = (bytes: number): string => {
+    if (bytes === 0) return "0 Bytes";
+    const k = 1024;
+    const sizes = ["Bytes", "KB", "MB", "GB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+  };
+
   const processFiles = (fileList: FileList): void => {
-    const newFiles: FileItem[] = Array.from(fileList).map(file => ({
+    const newFiles: FileItem[] = Array.from(fileList).map((file) => ({
       name: file.name,
-      type: file.type || 'unknown',
+      type: file.type || "unknown",
       size: file.size,
-      file: file
+      file: file,
     }));
-    
-    setFiles(prev => [...prev, ...newFiles]);
-    
+
+    setFiles((prev) => [...prev, ...newFiles]);
     setIsUploading(true);
     setUploadProgress(0);
-    
+
     const interval = setInterval(() => {
-      setUploadProgress(prev => {
+      setUploadProgress((prev) => {
         if (prev >= 100) {
           clearInterval(interval);
           setIsUploading(false);
@@ -78,7 +116,6 @@ const ClauseIQInterface: React.FC = () => {
     e.preventDefault();
     e.stopPropagation();
     setDragOver(false);
-    
     const droppedFiles = e.dataTransfer.files;
     if (droppedFiles && droppedFiles.length > 0) {
       processFiles(droppedFiles);
@@ -86,37 +123,55 @@ const ClauseIQInterface: React.FC = () => {
   };
 
   const removeFile = (index: number): void => {
-    setFiles(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const formatFileSize = (bytes: number): string => {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    setFiles((prev) => prev.filter((_, i) => i !== index));
   };
 
   const openFileDialog = (): void => {
     fileInputRef.current?.click();
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
+    try {
+      for (const fileItem of files) {
+        const formData = new FormData();
+        formData.append("pdf", fileItem.file);
 
-  }
+        const res = await fetch("http://localhost:5000/api/pdf/upload", {
+          method: "POST",
+          body: formData,
+        });
+
+        const { url, file } = await res.json();
+        const msg = { text: `Uploaded PDF: ${file?.name || 'PDF'}`, sender: "system" };
+        socket.emit("send_message", msg);
+        setMessages((prev) => [...prev, msg]);
+        
+        // Refresh the uploaded files list
+        const response = await fetch("http://localhost:5000/api/pdf");
+        const files = await response.json();
+        setUploadedFiles(files);
+      }
+
+      alert("Files uploaded successfully!");
+      setFiles([]);
+    } catch (err) {
+      console.error("Upload error:", err);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-slate-900 text-white p-6">
       <div className="mb-8">
-        <h1 className="text-4xl font-light">
+        <h1 className="text-4xl font-serif m-4 font-semibold">
           Clause<span className="text-teal-400">IQ</span>
         </h1>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 max-w-7xl mx-auto">
+        {/* File Upload Section */}
         <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
           <h2 className="text-xl font-medium text-teal-400 tracking-wide mb-6">FILE UPLOADER</h2>
-          
+
           {isUploading && (
             <div className="bg-slate-900 border border-slate-600 rounded-lg p-8 text-center mb-6">
               <div className="flex flex-col items-center space-y-4">
@@ -124,7 +179,7 @@ const ClauseIQInterface: React.FC = () => {
                 <div className="space-y-2">
                   <p className="text-slate-300">Processing files...</p>
                   <div className="w-64 h-2 bg-slate-700 rounded-full mx-auto">
-                    <div 
+                    <div
                       className="h-2 bg-teal-400 rounded-full transition-all duration-300 ease-out"
                       style={{ width: `${uploadProgress}%` }}
                     ></div>
@@ -136,11 +191,11 @@ const ClauseIQInterface: React.FC = () => {
           )}
 
           {files.length === 0 && !isUploading && (
-            <div 
+            <div
               className={`bg-slate-900 border-2 border-dashed rounded-lg p-12 text-center mb-6 transition-all duration-200 cursor-pointer ${
-                dragOver 
-                  ? 'border-teal-400 bg-slate-800 scale-105' 
-                  : 'border-slate-600 hover:border-teal-500 hover:bg-slate-850'
+                dragOver
+                  ? "border-teal-400 bg-slate-800 scale-105"
+                  : "border-slate-600 hover:border-teal-500 hover:bg-slate-850"
               }`}
               onDragOver={handleDragOver}
               onDragEnter={handleDragOver}
@@ -149,13 +204,19 @@ const ClauseIQInterface: React.FC = () => {
               onClick={openFileDialog}
             >
               <div className="flex flex-col items-center space-y-4">
-                <ArrowDown className={`w-16 h-16 transition-colors ${dragOver ? 'text-teal-400' : 'text-slate-500'}`} />
+                <ArrowDown
+                  className={`w-16 h-16 transition-colors ${
+                    dragOver ? "text-teal-400" : "text-slate-500"
+                  }`}
+                />
                 <div className="space-y-2">
                   <p className="text-slate-300 text-lg font-medium">
-                    {dragOver ? 'Drop files here' : 'Drop files here to upload'}
+                    {dragOver ? "Drop files here" : "Drop files here to upload"}
                   </p>
                   <p className="text-slate-500 text-sm">or click to browse files</p>
-                  <p className="text-slate-600 text-xs">Supports PDF, DOCX, TXT, and more</p>
+                  <p className="text-slate-600 text-xs">
+                    Supports PDF, DOCX, TXT, and more
+                  </p>
                 </div>
               </div>
             </div>
@@ -164,7 +225,7 @@ const ClauseIQInterface: React.FC = () => {
           {files.length > 0 && !isUploading && (
             <div className="space-y-3 mb-6">
               <div className="flex items-center justify-between">
-                <p className="text-slate-400 text-sm">{files.length} file(s) uploaded</p>
+                <p className="text-slate-400 text-sm">{files.length} file(s) selected</p>
                 <button
                   onClick={() => setFiles([])}
                   className="text-red-400 hover:text-red-300 text-xs transition-colors"
@@ -172,13 +233,20 @@ const ClauseIQInterface: React.FC = () => {
                   Clear all
                 </button>
               </div>
-              {files.map((file: FileItem, index: number) => (
-                <div key={index} className="flex items-center justify-between bg-slate-900 border border-slate-600 rounded-lg p-3 hover:border-slate-500 transition-colors">
+              {files.map((file, index) => (
+                <div
+                  key={index}
+                  className="flex items-center justify-between bg-slate-900 border border-slate-600 rounded-lg p-3 hover:border-slate-500 transition-colors"
+                >
                   <div className="flex items-center space-x-3">
                     <div className="w-2 h-2 bg-teal-400 rounded-full flex-shrink-0"></div>
                     <div className="flex flex-col min-w-0">
-                      <span className="text-slate-300 font-mono text-sm truncate">{file.name}</span>
-                      <span className="text-slate-500 text-xs">{formatFileSize(file.size)}</span>
+                      <span className="text-slate-300 font-mono text-sm truncate">
+                        {file.name}
+                      </span>
+                      <span className="text-slate-500 text-xs">
+                        {formatFileSize(file.size)}
+                      </span>
                     </div>
                   </div>
                   <button
@@ -194,47 +262,57 @@ const ClauseIQInterface: React.FC = () => {
           )}
 
           {files.length > 0 && !isUploading && (
-             <button
-                onSubmit={handleSubmit}
-                onClick={handleSubmit}
-                className="w-full bg-teal-400 hover:bg-teal-500 text-slate-900 py-3 px-4 rounded-lg font-medium transition-colors"
-              >
-                Upload Files
-              </button>
+            <button
+              onClick={handleSubmit}
+              className="w-full bg-teal-400 hover:bg-teal-500 text-slate-900 py-3 px-4 rounded-lg font-medium transition-colors"
+            >
+              Upload Files
+            </button>
           )}
 
           <input
             ref={fileInputRef}
             type="file"
             multiple
-            accept=".pdf,.docx,.doc,.txt,.eml,.png,.jpg,.jpeg"
+            accept=".pdf,.docx,.doc,.eml"
             onChange={handleFileInput}
             className="hidden"
           />
         </div>
 
+        {/* Chat Section */}
         <div className="bg-slate-800 border border-slate-700 rounded-lg p-6 flex flex-col">
           <h2 className="text-xl font-medium text-teal-400 tracking-wide mb-6">CHAT INTERFACE</h2>
-          
-          <div className="flex-1 space-y-4 mb-6 max-h-96 overflow-y-auto">
-            <div className="bg-slate-900 border border-slate-600 rounded-lg p-4">
-              <p className="text-slate-200">
-                46-year-old male, knee surgery in Pune, 3-month-old insurance policy
-              </p>
-            </div>
 
-            <div className="bg-slate-900 border border-slate-600 rounded-lg p-4">
-              <p className="text-slate-200">
-                Yes, knee surgery is covered under the policy
-              </p>
-            </div>
+          <div className="flex-1 space-y-4 mb-6 max-h-96 overflow-y-auto">
+            {/* Display uploaded PDF files */}
+            {uploadedFiles.map((file, index) => (
+              <div key={`file-${index}`} className="bg-slate-700 border border-slate-600 rounded-lg p-3">
+                <p className="text-slate-200">Uploaded PDF: {file.name}</p>
+                <p className="text-slate-400 text-xs">Size: {formatFileSize(file.size)} | Type: {file.type}</p>
+              </div>
+            ))}
+            
+            {/* Display chat messages */}
+            {messages.map((m, i) => (
+              <div
+                key={`msg-${i}`}
+                className={`p-3 rounded-lg border ${
+                  m.sender === "user"
+                    ? "bg-teal-600 border-teal-700"
+                    : "bg-slate-700 border-slate-600"
+                }`}
+              >
+                <p className="text-white">{m.text}</p>
+              </div>
+            ))}
           </div>
 
           <div className="flex space-x-3">
             <input
               type="text"
               value={message}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setMessage(e.target.value)}
+              onChange={(e) => setMessage(e.target.value)}
               onKeyPress={handleKeyPress}
               placeholder="Type a message..."
               className="flex-1 bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-slate-200 placeholder-slate-500 focus:outline-none focus:border-teal-400 transition-colors"
