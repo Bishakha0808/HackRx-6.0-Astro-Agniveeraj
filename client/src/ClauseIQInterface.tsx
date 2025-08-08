@@ -1,8 +1,9 @@
 "use client";
-
 import React, { useState, useRef, useEffect } from "react";
 import { ArrowDown, ArrowRight, X, Upload } from "lucide-react";
 import { io } from "socket.io-client";
+import { toast, ToastContainer } from "react-toastify";
+import "react-toastify/dist/ReactToastify.css";
 
 const socket = io("http://localhost:5000");
 
@@ -17,6 +18,7 @@ const ClauseIQInterface: React.FC = () => {
   const [message, setMessage] = useState<string>("");
   const [messages, setMessages] = useState<{ text: string; sender: string }[]>([]);
   const [uploadProgress, setUploadProgress] = useState<number>(0);
+  const [timeLeft, setTimeLeft] = useState<number | null>(null);
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [files, setFiles] = useState<FileItem[]>([]);
   const [dragOver, setDragOver] = useState<boolean>(false);
@@ -27,20 +29,7 @@ const ClauseIQInterface: React.FC = () => {
     socket.on("receive_message", (msg) => {
       setMessages((prev) => [...prev, msg]);
     });
-    
-    // Fetch existing PDF files from MongoDB
-    const fetchUploadedFiles = async () => {
-      try {
-        const response = await fetch("http://localhost:5000/api/pdf");
-        const files = await response.json();
-        setUploadedFiles(files);
-      } catch (error) {
-        console.error("Error fetching uploaded files:", error);
-      }
-    };
-    
-    fetchUploadedFiles();
-    
+
     return () => {
       socket.off("receive_message");
     };
@@ -49,7 +38,6 @@ const ClauseIQInterface: React.FC = () => {
   const handleSend = () => {
     if (!message.trim()) return;
     const msg = { text: message, sender: "user" };
-    socket.emit("send_message", msg);
     setMessages((prev) => [...prev, msg]);
     setMessage("");
   };
@@ -76,21 +64,7 @@ const ClauseIQInterface: React.FC = () => {
       size: file.size,
       file: file,
     }));
-
     setFiles((prev) => [...prev, ...newFiles]);
-    setIsUploading(true);
-    setUploadProgress(0);
-
-    const interval = setInterval(() => {
-      setUploadProgress((prev) => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          setIsUploading(false);
-          return 100;
-        }
-        return prev + 10;
-      });
-    }, 200);
   };
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>): void => {
@@ -136,23 +110,54 @@ const ClauseIQInterface: React.FC = () => {
         const formData = new FormData();
         formData.append("pdf", fileItem.file);
 
-        const res = await fetch("http://localhost:5000/api/pdf/upload", {
-          method: "POST",
-          body: formData,
+        setIsUploading(true);
+        setUploadProgress(0);
+        setTimeLeft(null);
+
+        await new Promise<void>((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          const startTime = Date.now();
+
+          xhr.upload.onprogress = (event) => {
+            if (event.lengthComputable) {
+              const percent = Math.round((event.loaded / event.total) * 100);
+              setUploadProgress(percent);
+
+              const elapsed = (Date.now() - startTime) / 1000;
+              const speed = event.loaded / elapsed;
+              const remaining = (event.total - event.loaded) / speed;
+              setTimeLeft(Math.max(0, Math.round(remaining)));
+            }
+          };
+
+          xhr.onload = async () => {
+            setIsUploading(false);
+            setTimeLeft(null);
+            if (xhr.status === 200) {
+              toast.success(`"${fileItem.name}" uploaded successfully ✅`);
+              setUploadedFiles([{
+                name: fileItem.name,
+                size: fileItem.size,
+                type: fileItem.type
+              }]);
+              resolve();
+            } else {
+              toast.error(`Failed to upload "${fileItem.name}" ❌`);
+              reject();
+            }
+          };
+
+          xhr.onerror = () => {
+            setIsUploading(false);
+            setTimeLeft(null);
+            toast.error(`Upload failed for "${fileItem.name}" ❌`);
+            reject();
+          };
+
+          xhr.open("POST", "http://localhost:5000/api/pdf/upload", true);
+          xhr.send(formData);
         });
-
-        const { url, file } = await res.json();
-        const msg = { text: `Uploaded PDF: ${file?.name || 'PDF'}`, sender: "system" };
-        socket.emit("send_message", msg);
-        setMessages((prev) => [...prev, msg]);
-        
-        // Refresh the uploaded files list
-        const response = await fetch("http://localhost:5000/api/pdf");
-        const files = await response.json();
-        setUploadedFiles(files);
       }
-
-      alert("Files uploaded successfully!");
       setFiles([]);
     } catch (err) {
       console.error("Upload error:", err);
@@ -161,30 +166,37 @@ const ClauseIQInterface: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-900 text-white p-6">
+      <ToastContainer position="top-right" />
+
       <div className="mb-8">
         <h1 className="text-4xl font-serif m-4 font-semibold">
           Clause<span className="text-teal-400">IQ</span>
         </h1>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 max-w-7xl mx-auto">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-20 max-w-7xl mx-auto">
         {/* File Upload Section */}
         <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
-          <h2 className="text-xl font-medium text-teal-400 tracking-wide mb-6">FILE UPLOADER</h2>
+          <h2 className="text-xl font-medium text-teal-400 tracking-wide mb-6">
+            FILE UPLOADER
+          </h2>
 
           {isUploading && (
             <div className="bg-slate-900 border border-slate-600 rounded-lg p-8 text-center mb-6">
               <div className="flex flex-col items-center space-y-4">
                 <Upload className="w-12 h-12 text-teal-400 animate-pulse" />
                 <div className="space-y-2">
-                  <p className="text-slate-300">Processing files...</p>
+                  <p className="text-slate-300">Uploading...</p>
                   <div className="w-64 h-2 bg-slate-700 rounded-full mx-auto">
                     <div
                       className="h-2 bg-teal-400 rounded-full transition-all duration-300 ease-out"
                       style={{ width: `${uploadProgress}%` }}
                     ></div>
                   </div>
-                  <p className="text-slate-400 text-sm">{uploadProgress}% complete</p>
+                  <p className="text-slate-400 text-sm">
+                    {uploadProgress}% complete{" "}
+                    {timeLeft !== null && `(Time left: ${timeLeft}s)`}
+                  </p>
                 </div>
               </div>
             </div>
@@ -225,7 +237,9 @@ const ClauseIQInterface: React.FC = () => {
           {files.length > 0 && !isUploading && (
             <div className="space-y-3 mb-6">
               <div className="flex items-center justify-between">
-                <p className="text-slate-400 text-sm">{files.length} file(s) selected</p>
+                <p className="text-slate-400 text-sm">
+                  {files.length} file(s) selected
+                </p>
                 <button
                   onClick={() => setFiles([])}
                   className="text-red-400 hover:text-red-300 text-xs transition-colors"
@@ -280,32 +294,41 @@ const ClauseIQInterface: React.FC = () => {
           />
         </div>
 
-        {/* Chat Section */}
         <div className="bg-slate-800 border border-slate-700 rounded-lg p-6 flex flex-col">
-          <h2 className="text-xl font-medium text-teal-400 tracking-wide mb-6">CHAT INTERFACE</h2>
+          <h2 className="text-xl font-medium text-teal-400 tracking-wide mb-6">
+            CHAT WITH CLAUSEIQ
+          </h2>
 
-          <div className="flex-1 space-y-4 mb-6 max-h-96 overflow-y-auto">
-            {/* Display uploaded PDF files */}
-            {uploadedFiles.map((file, index) => (
-              <div key={`file-${index}`} className="bg-slate-700 border border-slate-600 rounded-lg p-3">
-                <p className="text-slate-200">Uploaded PDF: {file.name}</p>
-                <p className="text-slate-400 text-xs">Size: {formatFileSize(file.size)} | Type: {file.type}</p>
-              </div>
-            ))}
-            
-            {/* Display chat messages */}
-            {messages.map((m, i) => (
+          <div className="flex-1 space-y-4 mb-6 max-h-96 overflow-y-auto pr-5">
+          {uploadedFiles.map((file, index) => (
               <div
-                key={`msg-${i}`}
-                className={`p-3 rounded-lg border ${
-                  m.sender === "user"
-                    ? "bg-teal-600 border-teal-700"
-                    : "bg-slate-700 border-slate-600"
-                }`}
+                key={`file-${index}`}
+                className="bg-slate-700 border border-slate-600 rounded-lg p-3"
               >
-                <p className="text-white">{m.text}</p>
+                <p className="text-slate-200">Uploaded PDF: {file.name}</p>
+                <p className="text-slate-400 text-xs">
+                  Size: {formatFileSize(file.size)} | Type: {file.type}
+                </p>
               </div>
             ))}
+
+{messages.map((m, i) => (
+  <div
+    key={`msg-${i}`}
+    className={`flex flex-col ${m.sender === "user" ? "items-end" : "items-start"}`}
+  >
+    <span className="text-xs text-slate-400 mb-1">{m.sender === "user" ? "User" : "Bot"}</span>
+    <div
+      className={`p-3 rounded-lg border max-w-[60%] ${
+        m.sender === "user"
+          ? "bg-teal-600 border-teal-700 text-white"
+          : "bg-slate-700 border-slate-600 text-white"
+      }`}
+    >
+      <p>{m.text}</p>
+    </div>
+  </div>
+))}
           </div>
 
           <div className="flex space-x-3">

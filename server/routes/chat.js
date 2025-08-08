@@ -3,7 +3,6 @@ import Message from "../models/Message.js";
 
 const router = express.Router();
 
-// Get all messages
 router.get("/", async (req, res) => {
   try {
     const messages = await Message.find().sort({ createdAt: 1 });
@@ -13,7 +12,6 @@ router.get("/", async (req, res) => {
   }
 });
 
-// Send a message
 router.post("/", async (req, res) => {
   try {
     const { content, sender = "user" } = req.body;
