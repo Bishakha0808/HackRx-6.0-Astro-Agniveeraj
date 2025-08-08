@@ -237,6 +237,13 @@ const ClauseIQInterface = () => {
               </button>
             </>
           )}
+          MONGODB_URI=mongodb+srv://archishaw2004:A9MiJ4uKWIIWWoIl@cluster0.gr40a4l.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0
+CLOUDINARY_CLOUD_NAME=dm9j97lv3
+CLOUDINARY_API_KEY=721618672112387
+CLOUDINARY_API_SECRET=u1T4RnvRZDP_nSwI5ShQrX1PEd0
+
+
+
 
           <input
             ref={fileInputRef}
